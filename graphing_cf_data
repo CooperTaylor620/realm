@@ -1,0 +1,67 @@
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import time
+from datetime import datetime
+
+current_datetime = datetime.now()
+formatted_datetime = current_datetime.strftime("%Y-%m-%d %H:%M:%S")
+safe_datetime = current_datetime.strftime("%Y%m%d_%H%M%S")
+
+exp = "250703"
+
+XYZ_PATH  = '/Users/coopertaylor/Downloads/250702-111658_gcbf_node(5)_xyz_all.csv'
+GCBF_PATH = '/Users/coopertaylor/Downloads/250702-111658_gcbf_node(5)_gcbf.csv'
+
+out_dir = os.path.expanduser("~/Downloads/cf_plots")
+os.makedirs(out_dir, exist_ok=True)
+
+df_xyz  = pd.read_csv(XYZ_PATH)
+df_gcbf = pd.read_csv(GCBF_PATH)
+t_xyz   = df_xyz.iloc[:, 0]
+t_gcbf  = df_gcbf.iloc[:, 0]
+
+for n in range(5):
+    # p1
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(t_xyz, df_xyz[f"cf{n}_x"], label="raw x")
+    ax.plot(t_gcbf, df_gcbf[f"cf{n}_state_x"], label="state_x")
+    ax.set_title(f"Exp {exp} CF{n} – Position X ({formatted_datetime})")
+    ax.set_xlabel("time_s"); ax.set_ylabel("x")
+    ax.legend(); ax.grid()
+    fig.savefig(os.path.join(out_dir, f"exp{exp}_cf{n}_plot1_x.png"))
+    plt.close(fig)
+
+    # p2
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(t_xyz, df_xyz[f"cf{n}_vx"], label="raw vx")
+    ax.plot(t_gcbf, df_gcbf[f"cf{n}_state_vx"], label="state_vx")
+    ax.plot(t_gcbf, df_gcbf[f"cf{n}_ax"], label="accel x")
+    ax.set_title(f"Exp {exp} CF{n} – Velocity & Accel X ({formatted_datetime})")
+    ax.set_xlabel("time_s"); ax.set_ylabel("vx / ax")
+    ax.legend(); ax.grid()
+    fig.savefig(os.path.join(out_dir, f"exp{exp}_cf{n}_plot2_vx_ax.png"))
+    plt.close(fig)
+
+    # p3
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(t_xyz, df_xyz[f"cf{n}_y"], label="raw y")
+    ax.plot(t_gcbf, df_gcbf[f"cf{n}_state_y"], label="state_y")
+    ax.set_title(f"Exp {exp} CF{n} – Position Y ({formatted_datetime})")
+    ax.set_xlabel("time_s"); ax.set_ylabel("y")
+    ax.legend(); ax.grid()
+    fig.savefig(os.path.join(out_dir, f"exp{exp}_cf{n}_plot3_y.png"))
+    plt.close(fig)
+
+    # p4
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(t_xyz, df_xyz[f"cf{n}_vy"], label="raw vy")
+    ax.plot(t_gcbf, df_gcbf[f"cf{n}_state_vy"], label="state_vy")
+    ax.plot(t_gcbf, df_gcbf[f"cf{n}_ay"], label="accel y")
+    ax.set_title(f"Exp {exp} CF{n} – Velocity & Accel Y ({formatted_datetime})")
+    ax.set_xlabel("time_s"); ax.set_ylabel("vy / ay")
+    ax.legend(); ax.grid()
+    fig.savefig(os.path.join(out_dir, f"exp{exp}_cf{n}_plot4_vy_ay.png"))
+    plt.close(fig)
+
+print(f"Saved 20 plots in {out_dir}")
