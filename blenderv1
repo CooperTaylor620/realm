@@ -1,0 +1,289 @@
+import os
+import importlib.util
+import bpy
+import csv
+from mathutils import Vector
+import pandas as pd
+import plotly.graph_objects as go
+import webbrowser
+from bpy.types import Operator, Panel
+from bpy.props import StringProperty
+
+BASE_DIR = r"C:\Users\Just\Documents\Clients\coopeer\Blender Simulation"
+XYZ_FILE = os.path.join(BASE_DIR, "250702-111658_gcbf_node(5)_xyz_all.csv")
+CTRL_FILE = os.path.join(
+    BASE_DIR, "250702-111658_gcbf_node(5)_controller_cmd.csv")
+PLOTLY_CSV_FILE = os.path.join(BASE_DIR, "xyz_all.csv")
+PLOTLY_HTML_FILE = os.path.join(BASE_DIR, "plot.html")
+BLENDER_PYTHON_PATH = r"C:\Program Files\Blender Foundation\Blender 4.4\4.4\python\bin\python.exe"
+
+current_time = 0.0
+last_frame = -1
+
+
+
+def install_dependencies():
+    if importlib.util.find_spec("plotly") is None or importlib.util.find_spec("pandas") is None:
+        print("Installing Plotly and pandas...")
+        try:
+            os.system(f'"{BLENDER_PYTHON_PATH}" -m pip install plotly pandas')
+            print("Dependencies installed successfully.")
+        except Exception as e:
+            print(f"Error installing dependencies: {e}")
+            raise ImportError("Failed to install Plotly and/or pandas")
+
+
+
+def setup_blender():
+    scene = bpy.context.scene
+    scene.frame_start = 0
+    fps = 24
+
+    drone_names = ["Drone0", "Drone1", "Drone2", "Drone3"]
+    payload_name = "Payload"
+    drones = [bpy.data.objects.get(name) for name in drone_names]
+    payload = bpy.data.objects.get(payload_name)
+
+    if not all(drones) or not payload:
+        raise ValueError(
+            "Ensure objects Drone0, Drone1, Drone2, Drone3, and Payload exist in the scene.")
+
+    text_objects = []
+    for i, drone_name in enumerate(drone_names):
+        bpy.ops.object.text_add(location=(0, 0, 0))
+        text_obj = bpy.context.object
+        text_obj.name = f"Data_{drone_name}"
+        text_obj.data.body = ""
+        text_obj.scale = (0.1, 0.1, 0.1)  # Small scale for visibility
+        text_objects.append(text_obj)
+
+    if not os.path.exists(XYZ_FILE):
+        raise FileNotFoundError(f"Could not find '{XYZ_FILE}'.")
+    if not os.path.exists(CTRL_FILE):
+        raise FileNotFoundError(f"Could not find '{CTRL_FILE}'.")
+
+    xyz_data = []
+    with open(XYZ_FILE, "r") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            cleaned_row = {}
+            for key, value in row.items():
+                try:
+                    cleaned_row[key] = float(value) if value.strip() else 0.0
+                except ValueError:
+                    cleaned_row[key] = 0.0
+            xyz_data.append(cleaned_row)
+
+    ctrl_data = []
+    with open(CTRL_FILE, "r") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            cleaned_row = {}
+            for key, value in row.items():
+                try:
+                    cleaned_row[key] = float(value) if value.strip() else 0.0
+                except ValueError:
+                    cleaned_row[key] = 0.0
+            ctrl_data.append(cleaned_row)
+
+    def get_ctrl_data_for_time(current_time, ctrl_data):
+        if not ctrl_data:
+            return None
+        closest_row = min(ctrl_data, key=lambda row: abs(
+            row["time_s"] - current_time))
+        return closest_row if abs(closest_row["time_s"] - current_time) < 1/fps else None
+
+    def update_scene(scene):
+        global current_time, last_frame
+        frame = scene.frame_current
+        if frame == last_frame:
+            return  # Skip if frame hasn't changed
+        last_frame = frame
+        current_time_local = frame / fps
+        current_time = current_time_local
+        ctrl_row = get_ctrl_data_for_time(current_time_local, ctrl_data)
+
+        update_plotly_plot()
+
+        if ctrl_row:
+            for j, text_obj in enumerate(text_objects):
+                cf = f"cf{j}"
+                thrust = ctrl_row.get(f"{cf}_thrust", 0.0)
+                roll = ctrl_row.get(f"{cf}_roll", 0.0)
+                pitch = ctrl_row.get(f"{cf}_pitch", 0.0)
+                yaw = ctrl_row.get(f"{cf}_yaw", 0.0)
+                ctrltargetz = ctrl_row.get(f"{cf}_ctrltargetz", 0.0)
+                text = f"{drone_names[j]}\nThrust: {thrust:.1f}\nRoll: {roll:.1f}\nPitch: {pitch:.1f}\nYaw: {yaw:.1f}\nZ-Target: {ctrltargetz:.3f}"
+                text_obj.data.body = text
+                drone = drones[j]
+                text_obj.location = drone.location + Vector((0.2, 0.2, 0.2))
+                text_obj.keyframe_insert(data_path="location", frame=frame)
+
+        for j, drone in enumerate(drones):
+            cf = f"cf{j}"
+            for i, xyz_row in enumerate(xyz_data):
+                time_s = xyz_row["time_s"]
+                if abs(time_s - current_time_local) < 1/fps:
+                    x = xyz_row.get(f"{cf}_x", 0.0)
+                    y = xyz_row.get(f"{cf}_y", 0.0)
+                    z = xyz_row.get(f"{cf}_z", 0.0)
+                    drone.location = (x, y, z)
+                    drone.keyframe_insert(data_path="location", frame=frame)
+
+        if drones:
+            centroid = Vector((0, 0, 0))
+            for drone in drones:
+                centroid += drone.location
+            centroid /= len(drones)
+            payload.location = centroid
+            payload.keyframe_insert(data_path="location", frame=frame)
+
+    bpy.app.handlers.frame_change_pre.clear()
+    bpy.app.handlers.frame_change_pre.append(update_scene)
+
+    for i, xyz_row in enumerate(xyz_data):
+        time_s = xyz_row["time_s"]
+        frame = int(time_s * fps)
+        scene.frame_set(frame)
+
+        for j, drone in enumerate(drones):
+            cf = f"cf{j}"
+            x = xyz_row.get(f"{cf}_x", 0.0)
+            y = xyz_row.get(f"{cf}_y", 0.0)
+            z = xyz_row.get(f"{cf}_z", 0.0)
+            drone.location = (x, y, z)
+            drone.keyframe_insert(data_path="location", frame=frame)
+
+        if drones:
+            centroid = Vector((0, 0, 0))
+            for drone in drones:
+                centroid += drone.location
+            centroid /= len(drones)
+            payload.location = centroid
+            payload.keyframe_insert(data_path="location", frame=frame)
+
+    scene.frame_end = max(int(row["time_s"] * fps) for row in xyz_data) + 1
+
+
+plotly_data = None
+drone_ids = []
+time_col = None
+
+
+
+class SelectCSVOperator(Operator):
+    bl_idname = "wm.select_csv"
+    bl_label = "Select XYZ CSV File"
+    filepath: StringProperty(subtype="FILE_PATH")
+
+    def execute(self, context):
+        global plotly_csv_file, plotly_data, drone_ids, time_col
+        plotly_csv_file = self.filepath
+        try:
+            plotly_data = pd.read_csv(self.filepath)
+            if plotly_data.empty:
+                raise ValueError("Selected CSV file is empty.")
+            time_col = plotly_data.columns[0]
+            drone_ids = sorted(
+                {col.split('_')[0] for col in plotly_data.columns[1:] if '_' in col})
+            if not drone_ids:
+                raise ValueError(
+                    "No valid drone ID columns found in CSV (e.g., cf0_x, cf0_y, cf0_z).")
+            update_plotly_plot()
+            context.scene['plotly_csv_status'] = f"Loaded: {os.path.basename(self.filepath)}"
+        except Exception as e:
+            context.scene['plotly_csv_status'] = f"Error: {str(e)}"
+            plotly_data = None
+            drone_ids = []
+            time_col = None
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+
+def update_plotly_plot():
+    global current_time, plotly_data, drone_ids, time_col
+    if plotly_data is None or plotly_data.empty or not drone_ids or not time_col:
+        return
+
+    fig = go.Figure()
+    for d in drone_ids:
+        x_col, y_col, z_col = f"{d}_x", f"{d}_y", f"{d}_z"
+        if x_col not in plotly_data or y_col not in plotly_data or z_col not in plotly_data:
+            continue
+        x = plotly_data[x_col]
+        y = plotly_data[y_col]
+        z = plotly_data[z_col]
+        fig.add_trace(go.Scatter3d(
+            x=x, y=y, z=z,
+            mode='lines', name=f"{d} (full)",
+            line=dict(width=2)
+        ))
+        tail_mask = (plotly_data[time_col] >= current_time -
+                     0.5) & (plotly_data[time_col] <= current_time)
+        fig.add_trace(go.Scatter3d(
+            x=x[tail_mask], y=y[tail_mask], z=z[tail_mask],
+            mode='lines', name=f"{d} (tail)",
+            line=dict(width=4)
+        ))
+        idx = (plotly_data[time_col] - current_time).abs().idxmin()
+        fig.add_trace(go.Scatter3d(
+            x=[x.iloc[idx]], y=[y.iloc[idx]], z=[z.iloc[idx]],
+            mode='markers+text', marker=dict(size=6), text=[d], textposition='top center',
+            name=f"{d} (current)"
+        ))
+    fig.update_layout(
+        scene=dict(xaxis_title='X (m)', yaxis_title='Y (m)',
+                   zaxis_title='Z (m)'),
+        margin=dict(l=0, r=0, b=0, t=30), height=600,
+        title=f"3D Trajectory (Time: {current_time:.2f}s)"
+    )
+
+    try:
+        with open(PLOTLY_HTML_FILE, "w") as f:
+            f.write(go.Figure.to_html(fig, full_html=True))
+        if not hasattr(update_plotly_plot, "browser_opened"):
+            webbrowser.open(f"file:///{PLOTLY_HTML_FILE}")
+            update_plotly_plot.browser_opened = True
+    except Exception as e:
+        print(f"Failed to write Plotly HTML: {e}")
+
+
+
+class DroneVisualizerPanel(Panel):
+    bl_label = "Drone Visualizer"
+    bl_idname = "PT_DroneVisualizer"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'Drone Viz'
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text=f"Current Time: {current_time:.2f}s")
+        layout.operator("wm.select_csv", text="Select XYZ CSV File")
+        status = context.scene.get('plotly_csv_status', "No CSV loaded")
+        layout.label(text=status)
+
+if __name__ == "__main__":
+    try:
+        install_dependencies()
+    except ImportError as e:
+        print(f"Dependency installation failed: {e}")
+        raise
+
+    for cls in [SelectCSVOperator, DroneVisualizerPanel]:
+        try:
+            bpy.utils.unregister_class(cls)
+        except RuntimeError:
+            pass
+
+    bpy.utils.register_class(SelectCSVOperator)
+    bpy.utils.register_class(DroneVisualizerPanel)
+
+    try:
+        setup_blender()
+    except Exception as e:
+        print(f"Blender setup failed: {e}")
+        raise
